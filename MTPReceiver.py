@@ -4,6 +4,8 @@
 ## import (add more if you need)
 import unreliable_channel
 from socket import *
+DATA = 0
+ACK = 1
 
 def create_packet():
 	print('do sth here')
