@@ -34,17 +34,14 @@ def create_packet(data, seqNum):
     #MTP header + data gets encapsulated in UDP header (UDP header gets added automatically by the socket -> don't need to implement)
 # crc32 available through zlib library
     #after adding the first 3 fields of MTP data and header, sender calculates a 32-bit checksum and appends it to the packet
-
+    packet = ''
     packet_type = DATA
     length = len(data)
 
     #print('data: ', data, ', seqNum: ', seqNum)
-    packet = ''
-    intermediate = ''
-    intermediate = str(packet_type) + str(seqNum) + str(length) + str(data)
-    intermediate = str.encode(intermediate)
-    checksum = zlib.crc32(intermediate)
-    packet = intermediate + bytes(checksum)
+    bytes_arr = bytes(str(packet_type) + str(seqNum) + str(length) + str(data), 'utf-8')
+    checksum = zlib.crc32(bytes_arr)
+    packet = bytes_arr + bytes(checksum)
     print('checksum:', checksum)
 
     return packet
@@ -65,7 +62,6 @@ def receive_thread():
 
 
 def main():
-    print('hey')
 	# read the command line arguments
     recv_ip = sys.argv[1]
     recv_port = sys.argv[2]
@@ -75,14 +71,13 @@ def main():
     log_filename = sys.argv[5]
 
 	# open log file and start logging
-    #logfile = open(log_filename, "a")
+    logfile = open(log_filename, "a")
 
 	# open client socket and bind  - 'client opens up a UDP client socket'
 
 	# start receive thread
 	#recv_thread = threading.Thread(target=rec_thread,args=(client_socket,))
 	#recv_thread.start()
-
 
 	# take the input file and split it into packets (use create_packet)
         #packet data size has to be <= 1472bytes (1472 chars) minus size of header
@@ -110,6 +105,12 @@ def main():
 	# while there are packets to send:
 		# send packets to server using our unreliable_channel.send_packet()
     #for pckt in packets:
+        #check if window allows
+            #send packet to server using unreliable_channel.send_packet
+            #start timer
+            #update window
+        #else - buffer until window is
+
 
 		# update the window size, timer, etc.
 
