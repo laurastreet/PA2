@@ -13,7 +13,7 @@ from socket import *
 
 DATA = 0
 ACK = 1
-
+lowest_unACKed_packet = 0 #critical value
 ## define and initialize
 # window_size, window_base, next_seq_number, dup_ack_count, etc.
 
@@ -22,7 +22,8 @@ ACK = 1
 
 ## we will need a lock to protect against concurrent threads
 #NOTE - you cannot receive and send at the same time
-lock = threading.Lock()
+recv_lock = threading.RLock()    #re-entrant lock receiving thread
+send_lock = threading.RLock()    #re-entrant lock sending thread
 
 # take the input file and split it into packets (use create_packet)
 # MTU = 1500bytes
@@ -38,14 +39,16 @@ def create_packet(data, seqNum):
     # print('length: ', length)
 
     #print('data: ', data, ', seqNum: ', seqNum)
-    bytes_arr = bytes(str(packet_type) + str(seqNum) + str(length) + str(data), 'utf-8')
+    bytes_arr = bytes(str(packet_type) + str(seqNum) + str(length) + str(data.decode()), 'utf-8')
     # print('sizeof(bytes_arr): ', sys.getsizeof(bytes_arr))
     checksum = zlib.crc32(bytes_arr)
     checksum = str(checksum)
-    checksum = bytes(checksum, 'utf-8')
+    packet = bytes(str(packet_type) + str(seqNum) + str(length) + str(data.decode()) + checksum, 'utf-8')
+    # print('packet: ', packet)
+    # x = str(packet_type) + str(seqNum) + str(length) + str(data) + checksum
+    # print('x: ', x)
     # print('sizeof(checksum): ', sys.getsizeof(checksum))
     # print(type(checksum))
-    packet = bytes_arr + checksum
     # print('checksum:', checksum)
 
     return packet
@@ -53,45 +56,72 @@ def create_packet(data, seqNum):
 def extract_packet_info(packet_from_server):
     decoded_packet = packet_from_server.decode('utf-8')
     packet_type = decoded_packet[0:1]
-    # seq_num = decoded_packet[1:-2]    ###unsure how to find this, since we don't have length...
-    # len = decoded_packet[]
-    # checksum = decoded_packet[]
-    bytes_arr = []
+    print('packet type: ', packet_type)
+    end_seqNum = decoded_packet.find('0x')
+    seq_num = decoded_packet[1:end_seqNum]    ###should be 32 bits/4 bytes
+    print('seq_num: ', seq_num)
+    len = decoded_packet[end_seqNum+2:end_seqNum+3]    #leave out '0x' at beginning of length
+    print('len: ', len)
+    checksum = decoded_packet[end_seqNum+3:]
+    checksum = int(checksum)
+    print('checksum:  ', checksum)
+    bytes_arr = bytes(str(packet_type) + str(seq_num) + '0x0', 'utf-8')
     corrupt = check_for_corruption(bytes_arr,checksum)
+    print('corrupt: ', corrupt)
 # extract the packet data after receiving
     return seq_num,corrupt
 
 def check_for_corruption(bytes_arr,checksum_sender):
     checksum = zlib.crc32(bytes_arr)
+    print('checksum: ', checksum)
     if(checksum==checksum_sender):
         return False
     else:
         return True
 
-def receive_thread(socket):
-    while(True):
-        # receive packet, but using our unreliable channel
-		packet_from_server, server_addr = unreliable_channel.recv_packet(socket)
-        extract_packet_info(packet_from_server)
-        # packet = extract_packet_info(packet_from_server)
-		# check for corruption, take steps accordingly
-		# update window size, timer, triple dup acks
 
+#where the receive_thread operates
+#has to acquire_lock, then release_lock when finished - or use with_lock:
+def receive_thread(socket):
+    lowest_unACKed_packet = 0
+    end_window = lowest_unACKed_packet + 5  # 5 = wind_size
+    while(True):
+        recv_lock.acquire()
+        print('receiver thread starting')
+        while(lowest_unACKed_packet<end_window):
+            # receive packet, but using our unreliable channel
+            # packet_from_server, server_addr = unreliable_channel.recv_packet(socket)
+            packet_from_server,server_addr = socket.recvfrom(2048)
+            print('serverAddress: ', server_addr)
+            seqNum,corrupt = extract_packet_info(packet_from_server)
+            # check for corruption, take steps accordingly
+            if(not corrupt):
+                # update window size, timer, triple dup acks
+                lowest_unACKed_packet +=1
+        end_window+=5                           #increment end_window
+        recv_lock.release()
+        time.sleep(10)
+
+def getSequence(packet):
+    decoded_packet = packet.decode('utf-8')
+    end_seqNum = decoded_packet.find('1400')
+    seq_num = decoded_packet[1:end_seqNum]  ###should be 32 bits/4 bytes
+    seq_num = int(seq_num)
+    return seq_num
 
 def MTPSender_main(arg):
     print('MTPSender starting')
     lowest_unACKed_seq_num = 0
-	# read the command line arguments
-    # recv_ip = sys.argv[1]             #127.0.0.1
+    # read the command line arguments
+    # recv_ip = sys.argv[1]
     # recv_port = sys.argv[2]
-    recv_port = 631
     # wind_size = sys.argv[3]       #size of sliding window
     wind_size = 5
     # filename = sys.argv[4]        #filename = './1MB.txt'
-    filname = '/home/laura/Downloads/1MB.txt'
+    filename = '/home/laura/Downloads/1MB.txt'
     # log_filename = sys.argv[5]
 
-	# open log file and start logging
+    # open log file and start logging
     # logfile = open(log_filename, "a")
 
     # open client socket and bind  - 'client opens up a UDP client socket'
@@ -106,51 +136,61 @@ def MTPSender_main(arg):
     receiverSocket = socket(AF_INET, SOCK_DGRAM)
     receiverSocket.bind((receiverAddr,receiverPort))
 
+    # start receive thread
+    recv_thread = threading.Thread(target=receive_thread,args=(receiverSocket,))
+    recv_lock.acquire()  # sender acquires receiver's lock
+    recv_thread.start()
 
 
-	# start receive thread
-	# recv_thread = threading.Thread(target=receive_thread,args=(clientSocket))
-	# recv_thread.start()
-
-
-	# take the input file and split it into packets (use create_packet)
+    # take the input file and split it into packets (use create_packet)
         #packet data size has to be <= 1472bytes (1472 chars) minus size of header
         #header = 8 bytes unsigned int (type) + 8 bytes unsigned int (seqnum) + 8 bytes unsigned int (length) + checksum (4 bytes)
         #packet data size <= 1472 bytes - 28 bytes = 1444 bytes
-    seqNum = 0
-    # filename = sys.argv[4]
     input_file = open('/home/laura/Downloads/1MB.txt') #open arg4
 
-        #preprocess input_file
+        #preprocess entire input file 1st
     str = ''
     for line in input_file:
         str += line
     bytes_arr = bytes(str, 'utf-8')
-    print(sys.getsizeof(bytes_arr))
+    # print('sys.getsizeof(bytes_arr): ', sys.getsizeof(bytes_arr))
     data_size = 1400
     packets = []
     lowest_unACKed_packet = 0
     highest_unACKed_packet = 4
+
+    packet_num = 0
     while(len(bytes_arr)>0):
         data = bytes_arr[0:data_size]
         bytes_arr = bytes_arr[data_size:]
-        print(sys.getsizeof(bytes_arr))
-        packet = create_packet(data,seqNum)
-
-        packets.append(packet)
+        # print('sys.getsizeof(bytes_arr): ', sys.getsizeof(bytes_arr))
+        packet = create_packet(data,packet_num)
+        packets.append(packet)      #buffer
+        packet_num+=1
         # clientSocket.sendto(packet,serverName)
-        sendingSocket.sendto(packet,(serverAddr,serverPort))  # trial to ensure sockets can communicate
-        # print('sent packet: ', seqNum)
-        time.sleep(0.2)
-        seqNum += 1
+
+    #sender thread will loop here
+    seqNum = 0
+    end_window = seqNum + wind_size
+    while(len(packets)>0):
+        print('end_window: ', end_window)
+        while(seqNum<end_window): #send as many packets as equals wind_size
+            # send packets to server using our unreliable_channel.send_packet()
+            packet = packets.pop(0)
+            seqNum = getSequence(packet)
+            # print('len(packets): ', len(packets))
+            sendingSocket.sendto(packet, (serverAddr, serverPort))  # trial to ensure sockets can communicate
+            print('sent packet: ', seqNum)
+            time.sleep(4)
+            seqNum += 1
+            # unreliable_channel.send_packet(clientSocket,packet,recv_port)    #last argument is an open port - 631
+            # update the window size, timer, etc.
+        end_window += wind_size
+        recv_lock.release()
+        time.sleep(10)
+        recv_lock.acquire()
 
 
-	# while there are packets to send:
-		# send packets to server using our unreliable_channel.send_packet()
 
-        # unreliable_channel.send_packet(clientSocket,packet,recv_port)    #last argument is an open port - 631
-		# update the window size, timer, etc.
-
-
-# MTPSender_main(0)
+MTPSender_main(0)
 
