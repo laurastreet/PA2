@@ -14,6 +14,8 @@ from socket import *
 DATA = 0
 ACK = 1
 lowest_unACKed_packet = 0 #critical value
+last_ACK_num = null
+num_duplicates = 0
 ## define and initialize
 # window_size, window_base, next_seq_number, dup_ack_count, etc.
 
@@ -52,22 +54,42 @@ def create_packet(data, seqNum):
     # print('checksum:', checksum)
 
     return packet
+def log_packet_info(sent_packet):
+
+    decoded_packet = packet_from_server.decode('utf-8')
+    packet_type = decoded_packet[0:1]
+    str_type = 'DATA' if packet_type == 0 else 'ACK'
+    end_seqNum = decoded_packet.find('0x')
+    seq_num = decoded_packet[1:end_seqNum]  ###should be 32 bits/4 bytes
+    len = decoded_packet[end_seqNum + 2:end_seqNum + 3]  # leave out '0x' at beginning of length
+
+    checksum = decoded_packet[end_seqNum + 3:]
+    checksum = int(checksum)
+    print('Packet sent; type=', str_type, '; seqNum=', seq_num, '; length=', len, '; checksum=', checksum, file=logfile)
+
 
 def extract_packet_info(packet_from_server):
     decoded_packet = packet_from_server.decode('utf-8')
     packet_type = decoded_packet[0:1]
-    print('packet type: ', packet_type)
+    #print('packet type: ', packet_type)
+    str_type = 'DATA' if packet_type == 0 else 'ACK'
     end_seqNum = decoded_packet.find('0x')
     seq_num = decoded_packet[1:end_seqNum]    ###should be 32 bits/4 bytes
-    print('seq_num: ', seq_num)
+    #print('seq_num: ', seq_num)
     len = decoded_packet[end_seqNum+2:end_seqNum+3]    #leave out '0x' at beginning of length
-    print('len: ', len)
+    #print('len: ', len)
     checksum = decoded_packet[end_seqNum+3:]
     checksum = int(checksum)
-    print('checksum:  ', checksum)
+    #print('checksum:  ', checksum)
     bytes_arr = bytes(str(packet_type) + str(seq_num) + '0x0', 'utf-8')
-    corrupt = check_for_corruption(bytes_arr,checksum)
-    print('corrupt: ', corrupt)
+    checksum_calculated , corrupt = check_for_corruption(bytes_arr,checksum)
+    #print('corrupt: ', corrupt)
+    status = 'NOT_CORRUPT' if not corrupt else 'CORRUPT'
+    #log the packet data
+
+    print('Packet received; type=', str_type, '; seqNum=', seq_num, '; length=', len, '; checksum_in_packet=',
+          checksum,'; checksum_calculated=',
+          checksum_calculated, 'status=', status,  file=logfile)
 # extract the packet data after receiving
     return seq_num,corrupt
 
@@ -75,9 +97,9 @@ def check_for_corruption(bytes_arr,checksum_sender):
     checksum = zlib.crc32(bytes_arr)
     print('checksum: ', checksum)
     if(checksum==checksum_sender):
-        return False
+        return checksum, False
     else:
-        return True
+        return checksum, True
 
 
 #where the receive_thread operates
@@ -97,7 +119,23 @@ def receive_thread(socket):
             # check for corruption, take steps accordingly
             if(not corrupt):
                 # update window size, timer, triple dup acks
-                lowest_unACKed_packet +=1
+                #check if a duplicate ack
+                if last_ACK_num != null:
+                    if seqNum == last_ACK_num:
+                       num_duplicates += 1
+                    else:
+                        num_duplicates = 0
+                        last_ACK_num = seqNum
+                    if num_duplicates == 3:
+                        #resend the oldest unacked packet and start the timer
+                        send_pacekt()
+                    else:
+                        if seqNum == lowest_unACKed_packet:
+                            lowest_unACKed_packet +=1
+                else:
+                    last_ACK_num = seqNum
+                    if seqNum == lowest_unACKed_packet:
+                        lowest_unACKed_packet += 1
         end_window+=5                           #increment end_window
         recv_lock.release()
         time.sleep(10)
@@ -119,10 +157,11 @@ def MTPSender_main(arg):
     wind_size = 5
     # filename = sys.argv[4]        #filename = './1MB.txt'
     filename = '/home/laura/Downloads/1MB.txt'
-    # log_filename = sys.argv[5]
+    #log_filename = sys.argv[5]
+    log_filename = 'sender-log-file'
 
     # open log file and start logging
-    # logfile = open(log_filename, "a")
+    logfile = open(log_filename, "w")
 
     # open client socket and bind  - 'client opens up a UDP client socket'
     serverAddr = '192.168.1.14'
@@ -146,7 +185,7 @@ def MTPSender_main(arg):
         #packet data size has to be <= 1472bytes (1472 chars) minus size of header
         #header = 8 bytes unsigned int (type) + 8 bytes unsigned int (seqnum) + 8 bytes unsigned int (length) + checksum (4 bytes)
         #packet data size <= 1472 bytes - 28 bytes = 1444 bytes
-    input_file = open('/home/laura/Downloads/1MB.txt') #open arg4
+    input_file = open(filename) #open arg4
 
         #preprocess entire input file 1st
     str = ''
@@ -180,7 +219,8 @@ def MTPSender_main(arg):
             seqNum = getSequence(packet)
             # print('len(packets): ', len(packets))
             sendingSocket.sendto(packet, (serverAddr, serverPort))  # trial to ensure sockets can communicate
-            print('sent packet: ', seqNum)
+            #print('sent packet: ', seqNum)
+            log_packet_info(packet, logfile)
             time.sleep(4)
             seqNum += 1
             # unreliable_channel.send_packet(clientSocket,packet,recv_port)    #last argument is an open port - 631
