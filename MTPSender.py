@@ -47,9 +47,9 @@ def extract_packet_info(packet_from_server,logfile):
     str_type = 'DATA' if packet_type == '0' else 'ACK'
     if(str_type == 'ACK'):
         end_seqNum = decoded_packet.find('0x')
-        print('end_seqNum: ', end_seqNum)
+        # print('end_seqNum: ', end_seqNum)
         seq_num = decoded_packet[1:end_seqNum]    ###should be 32 bits/4 bytes
-        print('seq_num: ', seq_num)
+        # print('seq_num: ', seq_num)
         len = decoded_packet[end_seqNum+2:end_seqNum+3]    #leave out '0x' at beginning of length
         # print('len: ', len)
         checksum = decoded_packet[end_seqNum+3:]
@@ -74,21 +74,21 @@ def log_packet_info(sent_packet,logfile):
     if packet_type == '0':
         str_type = 'DATA'
         end_seqNum = decoded_packet.find('1400')
-        print('end_seqNum:  ', end_seqNum)
+        # print('end_seqNum:  ', end_seqNum)
         seq_num = decoded_packet[1:end_seqNum]  ###should be 32 bits/4 bytes
-        print('seq_num: ', seq_num)
+        # print('seq_num: ', seq_num)
         len = decoded_packet[end_seqNum:end_seqNum + 4]  # len sent_packet = 1400
         # data = decoded_packet[end_seqNum+4:end_seqNum+1404]
         checksum = decoded_packet[end_seqNum + 1404:]
         checksum = int(checksum)
-        print('checksum: ', checksum)
+        # print('checksum: ', checksum)
     else:
         str_type = 'ACK'
         end_seqNum = decoded_packet.find('0x')
         seq_num = decoded_packet[1:end_seqNum]
         len = decoded_packet[end_seqNum+2:end_seqNum+3] #get rid of '0x'
         checksum = decoded_packet[end_seqNum+3:]    #no data in ACK packet
-    print('\nPacket sent; type=', str_type, '\n; seqNum=', seq_num, '\n; length=', len, '\n; checksum=', checksum,)
+    # print('\nPacket sent; type=', str_type, '\n; seqNum=', seq_num, '\n; length=', len, '\n; checksum=', checksum,)
     print('Packet sent; type=', str_type, '; seqNum=', seq_num, '; length=', len, '; checksum=', checksum,
           file=logfile)
 
@@ -118,15 +118,18 @@ def getPacketCheckSum(packet):
     checksum = decoded_packet[end_seqNum+1404:]
     return checksum
 
-def send_thread(senderSocket, serverAddr,serverPort, packets, seqNum,logfile):
+def send_thread(senderSocket, serverAddr,serverPort, packets, wind_size,logfile):
+    ###the sender may have to resend some packets - it should probably iterate through the last 5 packets and ensure that they were properly
+    #received - i.e. check their True values - prior to sending packets from a new window
     while True:
         global threadLock
         global packetsSent
         global packetIdx
         #send window sized # packets at a time, then give up lock
-        # threadLock.acquire()
         sendLock.acquire()      #initial value is 1 -> can start before receive_thread
-        while(packetsSent<5):
+        # while(packetsSent<5):
+        #first check that previous packets have been sent properly
+        while(packetsSent<wind_size):
             threadLock.acquire()
             packet_with_bool = packets[packetIdx]           #idx is the sequence number
             # print('packet_with_bool: ', packet_with_bool)
@@ -152,8 +155,8 @@ def resetTimer():
     timeLock.release()
     # return new_time         ###question about this???? (not defined in this function)
 
-
-def decrementTimer():
+#checks whether 0.5s has elapsed since oldest ACK-ed packet has been sent
+def elapsedTimer():
     global curr_time
     timeLock.acquire()
     new_time = time.perf_counter() - curr_time       #this should be <500ms for oldest unACKed packet
@@ -166,9 +169,8 @@ def decrementTimer():
 
 #where the receive_thread operates
 #se boolean value to True to indicate that packets have been properly received
-def receive_thread(receiverSocket,senderSocket,serverAddr,serverPort,logfile):
+def receive_thread(receiverSocket,senderSocket,serverAddr,serverPort,logfile,wind_size):
     while True:
-        # channelLock.acquire()       #acquire decrements semaphore value - will block until count > 0 - this ensure that send goes first
         receiveLock.acquire()       #initial value = 0 -> has to wait until send_thread is finished
         print('in receive_thread')
         global threadLock
@@ -177,16 +179,31 @@ def receive_thread(receiverSocket,senderSocket,serverAddr,serverPort,logfile):
         global prevACKReceived
         global numDuplicates
 
-        while(packetsReceived<5):
+        elapsed_time = 0.0
+        #maybe I should recheck the time if it didn't elapse after receiving the lowest unACKed packet, so this doesn't deadlock?
+        #(e.g. if only one packet in the window was being resent)
+        while(packetsReceived<wind_size and elapsed_time <0.5):
+        # while(packetsReceived<5):
             threadLock.acquire()
             # print('lowestPacketIdx: ', lowestPacketIdx)        #lowest unACKed packet
-            packet,serverAddress = receiverSocket.recvfrom(2048)
-            seqNum,corrupt,checksum = extract_packet_info(packet,logfile)
-            if(not corrupt and seqNum==lowestPacketIdx):    #and expected sequence Number###################
-                packets[seqNum] = True
-                new_time = decrementTimer()     #see whether time has timed out or not
-                if(new_time>0.5):           #returns value of time in seconds
-                    senderSocket.sendto(packet,(serverAddr,serverPort))     #resend oldest packet
+            ACK,serverAddress = receiverSocket.recvfrom(2048)
+            seqNum,corrupt,checksum = extract_packet_info(ACK,logfile)
+            if(not corrupt and seqNum==lowestPacketIdx):
+                elapsed_time = elapsedTimer()
+                    #if timeout occurs for oldest unACKed packet
+                if(elapsed_time>0.5):           #returns value of time in seconds
+                    #resend all packets in window
+                    i=0
+                    while(i<wind_size and i<len(packets)):            #check for final packet (in this case, can potentially resend fewer packets than wind_size)
+                        packet_with_bool = packets[seqNum+i]        #get packet with data
+                        packet = packet_with_bool[0]                #packet_with_bool is in format [packet,True/False]
+                        senderSocket.sendto(packet,(serverAddr,serverPort))     #resend packet
+                        i+=1
+                    resetTimer()
+                else:
+                    packets[seqNum] = True      #I think we only mark this as true if the timer hasn't elapsed (so check that first)
+
+            #check for triple duplicate ACK
             if(not corrupt and seqNum!=0):
                 if prevACKReceived == -1:  # if no acks were received before
                     prevACKReceived = seqNum
@@ -194,11 +211,15 @@ def receive_thread(receiverSocket,senderSocket,serverAddr,serverPort,logfile):
                     if prevACKReceived == seqNum:
                         numDuplicates += 1
                         if numDuplicates == 3:
-                            senderSocket.sendto(packet, (serverAddr, serverPort))  # resend oldest packet
+                            packet_with_bool = packets[seqNum]
+                            packet = packet_with_bool[0]
+                            senderSocket.sendto(packet, (serverAddr, serverPort))  #resend packet
                             resetTimer()
                             numDuplicates = 0
-            packetsReceived += 1
 
+            #if ACK is corrupt,  we ignore
+
+            packetsReceived += 1
             print('packet: ', seqNum, ' received, checksum: ', checksum)
             threadLock.release()
         packetsReceived = 0                 #reset packetsReceived = 0
@@ -228,7 +249,7 @@ def MTPSender_main(arg):
     # read the command line arguments
     recv_ip = sys.argv[1]           #receiverAddr = '192.168.1.15'
     recv_port = int(sys.argv[2])         #receiverPort = 49153
-    print('recv_port: ', recv_port)
+    # print('recv_port: ', recv_port)
     wind_size = int(sys.argv[3])       #size of sliding window
     # wind_size = 5             wind_size = 5
     # filename = sys.argv[4]        #filename = './1MB.txt'
@@ -276,9 +297,9 @@ def MTPSender_main(arg):
     seqNum = 0
     #start threads
     senderThread = threading.Thread(target=send_thread,
-                                    args=(sendingSocket,serverAddr,serverPort,packets, seqNum,logfile))
+                                    args=(sendingSocket,serverAddr,serverPort,packets, wind_size,logfile))
     receiverThread = threading.Thread(target=receive_thread,
-                                      args=(receiverSocket,sendingSocket,serverAddr,serverPort,logfile))
+                                      args=(receiverSocket,sendingSocket,serverAddr,serverPort,logfile, wind_size))
     senderThread.start()
     receiverThread.start()
 
