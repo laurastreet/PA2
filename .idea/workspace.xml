@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ChangeListManager">
     <list default="true" id="69f5e3e8-809c-41f5-89c2-0e3c979a7351" name="Default Changelist" comment="start create_packet">
-      <change beforePath="$PROJECT_DIR$/MTPReceiver.py" beforeDir="false" afterPath="$PROJECT_DIR$/MTPReceiver.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/MTPReceiver .py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/MTPSender.py" beforeDir="false" afterPath="$PROJECT_DIR$/MTPSender.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />

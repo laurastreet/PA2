@@ -1,7 +1,3 @@
-
-
-
-
 import unreliable_channel
 from socket import *
 import sys
@@ -10,6 +6,7 @@ import time
 import zlib
 DATA = 0
 ACK = 1
+
 # channelLock = threading.Semaphore(5)
 receiveLock = threading.Semaphore(1)	#start with receive_thread
 sendLock = threading.Semaphore(0)
@@ -39,7 +36,7 @@ def log_packet_info(packet):
 
     # print('decoded_packet: ', decoded_packet)
     packet_type = decoded_packet[0:1]
-    str_type = 'DATA' if packet_type == 0 else 'ACK'
+    str_type = 'DATA' if packet_type == 0 or packet_type == 2 else 'ACK'
     if (str_type == 'DATA'):
         end_seqNum = decoded_packet.find('1400')
         seq_num = decoded_packet[1:end_seqNum]  ###should be 32 bits/4 bytes
@@ -64,7 +61,8 @@ def extract_packet_info(ModifiedMessage):
     end_seqNum = decoded_packet.find('1400')
 
     packet_type = decoded_packet[0:1]
-    str_type = 'DATA' if packet_type == 0 else 'ACK'
+    str_type = 'DATA' if packet_type == 0 or packet_type == 2 else 'ACK'
+    lastPacket = True if packet_type == 2 else False
     seq_num = decoded_packet[1:end_seqNum]
     seq_num = int(seq_num)
     length = decoded_packet[end_seqNum:end_seqNum+4]
@@ -79,7 +77,7 @@ def extract_packet_info(ModifiedMessage):
     print('Packet received; type=', str_type, '; seqNum=', seq_num, '; length=', len, '; checksum_in_packet=',
           checksum, '; checksum_calculated=',
           checksum_calc, 'status=', status, file=logfile)
-    return seq_num, corrupt, checksum, data
+    return seq_num, corrupt, checksum, data, lastPacket
 # extract the packet data after receiving
 
 def check_for_corruption(bytes_arr, checksum_sender):
@@ -169,4 +167,3 @@ def MTPReceiver_main(arg):
     senderThread.start()
 
 MTPReceiver_main(0)
-

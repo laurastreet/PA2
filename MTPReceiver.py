@@ -6,6 +6,7 @@ import time
 import zlib
 DATA = 0
 ACK = 1
+END = 2
 # channelLock = threading.Semaphore(5)
 receiveLock = threading.Semaphore(1)	#start with receive_thread
 sendLock = threading.Semaphore(0)
@@ -18,7 +19,7 @@ packetsAvailable = 0
 # receiveLock = threading.Lock()
 threadlock = threading.Lock()
 
-
+#use this receiver
 #ACK packets have the same fields as the data packets, without any data
 def create_packet(seq_num):
     packet_type = 1
