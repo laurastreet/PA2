@@ -2,7 +2,6 @@
 <project version="4">
   <component name="ChangeListManager">
     <list default="true" id="69f5e3e8-809c-41f5-89c2-0e3c979a7351" name="Default Changelist" comment="start create_packet">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/MTPReceiver.py" beforeDir="false" afterPath="$PROJECT_DIR$/MTPReceiver.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/MTPSender.py" beforeDir="false" afterPath="$PROJECT_DIR$/MTPSender.py" afterDir="false" />
     </list>
@@ -30,6 +29,7 @@
   <component name="PropertiesComponent">
     <property name="RunOnceActivity.OpenProjectViewOnStart" value="true" />
     <property name="RunOnceActivity.ShowReadmeOnStart" value="true" />
+    <property name="com.intellij.ide.scratch.LRUPopupBuilder$1/New Scratch File" value="Python" />
     <property name="last_opened_file_path" value="$PROJECT_DIR$" />
   </component>
   <component name="SpellCheckerSettings" RuntimeDictionaries="0" Folders="0" CustomDictionaries="0" DefaultDictionary="application-level" UseSingleDictionary="true" transferred="true" />
