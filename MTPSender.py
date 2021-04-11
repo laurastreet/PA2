@@ -14,9 +14,8 @@ from socket import *
 DATA = 0
 ACK = 1
 packets = []  #
-logfile = open("new_logfile", 'w')
+logfile = open("new_logfile.txt", 'w')
 curr_time = 0
-# last_ACK_num = null
 
 
 # channelLock = threading.Semaphore(0)    #start with sender
@@ -27,6 +26,9 @@ packetsSent = 0
 packetIdx = 0
 lowestPacketIdx = 0
 packetsReceived = 0
+prevACKReceived = null
+numDuplicates = 0
+
 threadLock = threading.Lock()
 timeLock = threading.Lock()
 
@@ -59,18 +61,18 @@ def extract_packet_info(packet_from_server):
     status = 'NOT_CORRUPT' if not corrupt else 'CORRUPT'
     global logfile
     print('Packet received; type=', str_type, '; seqNum=', seq_num, '; length=', len, '; checksum_in_packet=',
-          checksum, '; checksum_calulatedcud=',
+          checksum, '; checksum_calculated=',
           checksum_calc, 'status=', status, file=logfile)
     # extract the packet data after receiving
     return seq_num, corrupt, checksum
 
 
-def log_packet_info(sent_packet):
-    decoded_packet = sent_packet.decode('utf-8')
+def log_packet_info(packet):
+    decoded_packet = packet.decode('utf-8')
     # print('decoded_packet: ', decoded_packet)
     packet_type = decoded_packet[0:1]
     str_type = 'DATA' if packet_type == 0 else 'ACK'
-    if (str_type == 'DATA'):
+    if str_type == 'DATA':
         end_seqNum = decoded_packet.find('1400')
         seq_num = decoded_packet[1:end_seqNum]  ###should be 32 bits/4 bytes
         len = decoded_packet[end_seqNum:end_seqNum + 4]  # len sent_packet = 1400
@@ -90,7 +92,7 @@ def log_packet_info(sent_packet):
 def check_for_corruption(bytes_arr, checksum_sender):
     checksum = zlib.crc32(bytes_arr)
     # print('checksum: ', checksum)
-    if (checksum == checksum_sender):
+    if checksum == checksum_sender:
         return checksum, False
     else:
         return checksum, True
@@ -103,7 +105,6 @@ def getPacketSeqNum(packet):
     seqNum = int(seqNum)
     return seqNum
 
-
 def getPacketCheckSum(packet):
     decoded_packet = packet.decode('utf-8')
     end_seqNum = decoded_packet.find('1400')
@@ -111,7 +112,6 @@ def getPacketCheckSum(packet):
     data = decoded_packet[end_seqNum + 4:end_seqNum + 1404]
     checksum = decoded_packet[end_seqNum + 1404:]
     return checksum
-
 
 def send_thread(senderSocket, serverAddr, serverPort, packets, seqNum, logfile):
     while True:
@@ -145,6 +145,7 @@ def resetTimer():
     curr_time = time.perf_counter()  # start oldest packet timer
     print('curr_timeSEND: ', curr_time)
     timeLock.release()
+    return new_time
 
 
 def decrementTimer():
@@ -168,40 +169,31 @@ def receive_thread(receiverSocket, senderSocket, serverAddr, serverPort):
         global threadLock
         global lowestPacketIdx
         global packetsReceived
+        global prevACKReceived
+        global numDuplicates
 
-        while (packetsReceived < 5):
+        while packetsReceived < 5:
             threadLock.acquire()
             # print('lowestPacketIdx: ', lowestPacketIdx)        #lowest unACKed packet
             packet, serverAddress = receiverSocket.recvfrom(2048)
             seqNum, corrupt, checksum = extract_packet_info(packet)
-            if (not corrupt and seqNum == lowestPacketIdx):  # and expected sequence Number###################
+            if not corrupt and seqNum == lowestPacketIdx:  # and expected sequence Number###################
                 packets[seqNum] = True
                 new_time = decrementTimer()  # see whether time has timed out or not
-                if (new_time > 0.5):  # returns value of time in seconds
+                if new_time > 0.5:  # returns value of time in seconds
                     senderSocket.sendto(packet, (serverAddr, serverPort))  # resend oldest packet
-            if (not corrupt and seqNum != 0):
-                packets[seqNum] = True
+            if not corrupt and seqNum != 0:
+                if prevACKReceived == null:     #if no acks were received before
+                    prevACKReceived = seqNum
+                else:                           #check the previous acks
+                    if prevACKReceived == seqNum:
+                        numDuplicates += 1
+                        if numDuplicates == 3:
+                            senderSocket.sendto(packet, (serverAddr, serverPort))  # resend oldest packet
+                            resetTimer()
+                            numDuplicates = 0
             packetsReceived += 1
 
-            # if (not corrupt):
-            #    # update window size, timer, triple dup acks
-            #    # check if a duplicate ack
-            #    if last_ACK_num != null:
-            #        if seqNum == last_ACK_num:
-            #            num_duplicates += 1
-            #        else:
-            #            num_duplicates = 0
-            #            last_ACK_num = seqNum
-            #        if num_duplicates == 3:
-            #            #resend the oldest unacked packet and start the timer
-            #
-            #        else:
-            #            if seqNum == lowest_unACKed_packet:
-            #                lowest_unACKed_packet += 1
-            #    else:
-            #        last_ACK_num = seqNum
-            #        if seqNum == lowest_unACKed_packet:
-            #            lowest_unACKed_packet += 1
             print('packet: ', seqNum, ' received, checksum: ', checksum)
             threadLock.release()
         packetsReceived = 0  # reset packetsReceived = 0
@@ -209,7 +201,7 @@ def receive_thread(receiverSocket, senderSocket, serverAddr, serverPort):
         sendLock.release()  # increments value of send_thread semaphore so send_thread can go now
 
 
-def resendPacket(packet, senderSocket, serverAddr, serverPort):
+def resendPacket(senderSocket, serverAddr, serverPort):
     for packet, status in packets:
         if status == False:
             senderSocket.sendto(packet, (serverAddr, serverPort))
@@ -237,7 +229,7 @@ def MTPSender_main(arg):
     # filename = sys.argv[4]        #filename = './1MB.txt'
     filename = '/home/laura/Downloads/1MB.txt'
     # log_filename = sys.argv[5]     #log_filename = sender_log.log
-    log_filename = 'sender_log.log'
+    log_filename = 'sender_log.txt'
 
     # open log file and start logging
     global logfile

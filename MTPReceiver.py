@@ -14,6 +14,7 @@ ACK = 1
 receiveLock = threading.Semaphore(1)	#start with receive_thread
 sendLock = threading.Semaphore(0)
 
+logfile = open("new_logfile.txt", 'w')
 ACKsent = 0
 packetsAvailable = 0
 # sentlock = threading.Lock()
@@ -32,6 +33,27 @@ def create_packet(seq_num):
 	packet = bytes_arr + checksum
 	return packet, checksum
 
+def log_packet_info(packet):
+    decoded_packet = packet.decode('utf-8')
+
+    # print('decoded_packet: ', decoded_packet)
+    packet_type = decoded_packet[0:1]
+    str_type = 'DATA' if packet_type == 0 else 'ACK'
+    if (str_type == 'DATA'):
+        end_seqNum = decoded_packet.find('1400')
+        seq_num = decoded_packet[1:end_seqNum]  ###should be 32 bits/4 bytes
+        len = decoded_packet[end_seqNum:end_seqNum + 4]  # len sent_packet = 1400
+        data = decoded_packet[end_seqNum + 4:end_seqNum + 1404]
+        checksum = decoded_packet[end_seqNum + 1404:]
+        checksum = int(checksum)
+    else:
+        end_seqNum = decoded_packet.find('0x')
+        seq_num = decoded_packet[1:end_seqNum]
+        len = decoded_packet[end_seqNum + 2:end_seqNum + 3]  # get rid of '0x'
+        checksum = decoded_packet[end_seqNum + 3:]  # no data in ACK packet
+	global logfile
+	print('Packet sent; type=', str_type, '; seqNum=', seq_num, '; length=', len, '; checksum=', checksum, file=logfile)
+
 
 #should return the sequence number of packet and whether it is corrupt or not
 #note that the checksum length usually seems to equal 10, but sometimes it also equals 9 or 8
@@ -43,6 +65,7 @@ def extract_packet_info(ModifiedMessage):
 	end_seqNum = decoded_packet.find('1400')
 
 	packet_type = decoded_packet[0:1]
+	str_type = 'DATA' if packet_type == 0 else 'ACK'
 	# print('packet_type: ', packet_type)
 	seq_num = decoded_packet[1:end_seqNum]		#this is sandwiched in between packet_type and length (will vary but Receiver will
 		#eventually know what to expect) - keep at length 1 for now
@@ -60,7 +83,12 @@ def extract_packet_info(ModifiedMessage):
 	# 	bytes_arr = bytes(decoded_packet[0:-9], 'utf-8')
 	# print('type(checksum_sender): ', type(checksum))
 	# print('checksum_sender: ', checksum)
-	corrupt = check_for_corruption(bytes_arr, checksum)
+	checksum_calc, corrupt = check_for_corruption(bytes_arr, checksum)
+	status = 'NOT_CORRUPT' if not corrupt else 'CORRUPT'
+	global logfile
+	print('Packet received; type=', str_type, '; seqNum=', seq_num, '; length=', len, '; checksum_in_packet=',
+		  checksum, '; checksum_calculated=',
+		  checksum_calc, 'status=', status, file=logfile)
 	return seq_num, corrupt, checksum
 # extract the packet data after receiving
 
@@ -69,9 +97,9 @@ def check_for_corruption(bytes_arr, checksum_sender):
 	checksum = str(checksum)
 	# print('checksum: ', checksum)
 	if(checksum == checksum_sender):
-		return False
+		return checksum, False
 	else:
-		return True
+		return checksum, True
 
 def receiver_thread(receiverSocket):
 	while True:
@@ -121,6 +149,11 @@ def MTPReceiver_main(arg):
 	# open log file and start logging
 	# logfile = open(log_filename, "a")
 
+	log_filename = 'receiver_log.txt'
+
+	# open log file and start logging
+	global logfile
+	logfile = open(log_filename, "w")
 	#set up sockets
 	receiverAddr = '192.168.1.14'
 	# receiverAddr = '172.20.10.5'
