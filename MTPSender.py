@@ -13,6 +13,7 @@ packets = []
 curr_time = 0
 
 
+
 # channelLock = threading.Semaphore(0)    #start with sender
 sendLock = threading.Semaphore(1)
 receiveLock = threading.Semaphore(0)
@@ -312,3 +313,4 @@ def MTPSender_main(arg):
 
 
 MTPSender_main(0)
+
