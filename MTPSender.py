@@ -223,7 +223,7 @@ def receive_thread(receiverSocket,senderSocket,serverAddr,serverPort,logfile,win
             print('packet: ', seqNum, ' received, checksum: ', checksum)
             threadLock.release()
         packetsReceived = 0                 #reset packetsReceived = 0
-        lowestPacketIdx +=5                       #increase lowest unACKed packet by window size
+        lowestPacketIdx +=wind_size                       #increase lowest unACKed packet by window size
         sendLock.release()                  #increments value of send_thread semaphore so send_thread can go now
 
 
