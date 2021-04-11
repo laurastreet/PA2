@@ -13,224 +13,271 @@ from socket import *
 
 DATA = 0
 ACK = 1
-lowest_unACKed_packet = 0 #critical value
-last_ACK_num = null
-num_duplicates = 0
+packets = []  #
+logfile = open("new_logfile", 'w')
+curr_time = 0
+# last_ACK_num = null
+
+
+# channelLock = threading.Semaphore(0)    #start with sender
+sendLock = threading.Semaphore(1)
+receiveLock = threading.Semaphore(0)
+
+packetsSent = 0
+packetIdx = 0
+lowestPacketIdx = 0
+packetsReceived = 0
+threadLock = threading.Lock()
+timeLock = threading.Lock()
+
+
 ## define and initialize
 # window_size, window_base, next_seq_number, dup_ack_count, etc.
 
-# client_port
-
-
-## we will need a lock to protect against concurrent threads
-#NOTE - you cannot receive and send at the same time
-recv_lock = threading.RLock()    #re-entrant lock receiving thread
-send_lock = threading.RLock()    #re-entrant lock sending thread
-
-# take the input file and split it into packets (use create_packet)
-# MTU = 1500bytes
-# max size of MTU header + data = 1472 bytes
-    #MTU header =
-    #UDP header = 8 bytes
-    #IP header = 20 bytes
 def create_packet(data, seqNum):
-    #after adding the first 3 fields of MTP data and header, sender calculates a 32-bit checksum and appends it to the packet
-    packet = ''
     packet_type = DATA
     length = len(data)
-    # print('length: ', length)
-
-    #print('data: ', data, ', seqNum: ', seqNum)
     bytes_arr = bytes(str(packet_type) + str(seqNum) + str(length) + str(data.decode()), 'utf-8')
-    # print('sizeof(bytes_arr): ', sys.getsizeof(bytes_arr))
     checksum = zlib.crc32(bytes_arr)
     checksum = str(checksum)
     packet = bytes(str(packet_type) + str(seqNum) + str(length) + str(data.decode()) + checksum, 'utf-8')
-    # print('packet: ', packet)
-    # x = str(packet_type) + str(seqNum) + str(length) + str(data) + checksum
-    # print('x: ', x)
-    # print('sizeof(checksum): ', sys.getsizeof(checksum))
-    # print(type(checksum))
-    # print('checksum:', checksum)
-
     return packet
-def log_packet_info(sent_packet):
-
-    decoded_packet = packet_from_server.decode('utf-8')
-    packet_type = decoded_packet[0:1]
-    str_type = 'DATA' if packet_type == 0 else 'ACK'
-    end_seqNum = decoded_packet.find('0x')
-    seq_num = decoded_packet[1:end_seqNum]  ###should be 32 bits/4 bytes
-    len = decoded_packet[end_seqNum + 2:end_seqNum + 3]  # leave out '0x' at beginning of length
-
-    checksum = decoded_packet[end_seqNum + 3:]
-    checksum = int(checksum)
-    print('Packet sent; type=', str_type, '; seqNum=', seq_num, '; length=', len, '; checksum=', checksum, file=logfile)
 
 
 def extract_packet_info(packet_from_server):
     decoded_packet = packet_from_server.decode('utf-8')
     packet_type = decoded_packet[0:1]
-    #print('packet type: ', packet_type)
     str_type = 'DATA' if packet_type == 0 else 'ACK'
     end_seqNum = decoded_packet.find('0x')
-    seq_num = decoded_packet[1:end_seqNum]    ###should be 32 bits/4 bytes
-    #print('seq_num: ', seq_num)
-    len = decoded_packet[end_seqNum+2:end_seqNum+3]    #leave out '0x' at beginning of length
-    #print('len: ', len)
-    checksum = decoded_packet[end_seqNum+3:]
+    seq_num = decoded_packet[1:end_seqNum]  ###should be 32 bits/4 bytes
+    seq_num = int(seq_num)
+    len = decoded_packet[end_seqNum + 2:end_seqNum + 3]  # leave out '0x' at beginning of length
+    checksum = decoded_packet[end_seqNum + 3:]
     checksum = int(checksum)
-    #print('checksum:  ', checksum)
     bytes_arr = bytes(str(packet_type) + str(seq_num) + '0x0', 'utf-8')
-    checksum_calculated , corrupt = check_for_corruption(bytes_arr,checksum)
-    #print('corrupt: ', corrupt)
+    checksum_calc, corrupt = check_for_corruption(bytes_arr, checksum)
     status = 'NOT_CORRUPT' if not corrupt else 'CORRUPT'
-    #log the packet data
-
+    global logfile
     print('Packet received; type=', str_type, '; seqNum=', seq_num, '; length=', len, '; checksum_in_packet=',
-          checksum,'; checksum_calculated=',
-          checksum_calculated, 'status=', status,  file=logfile)
-# extract the packet data after receiving
-    return seq_num,corrupt
+          checksum, '; checksum_calulatedcud=',
+          checksum_calc, 'status=', status, file=logfile)
+    # extract the packet data after receiving
+    return seq_num, corrupt, checksum
 
-def check_for_corruption(bytes_arr,checksum_sender):
+
+def log_packet_info(sent_packet):
+    decoded_packet = sent_packet.decode('utf-8')
+    # print('decoded_packet: ', decoded_packet)
+    packet_type = decoded_packet[0:1]
+    str_type = 'DATA' if packet_type == 0 else 'ACK'
+    if (str_type == 'DATA'):
+        end_seqNum = decoded_packet.find('1400')
+        seq_num = decoded_packet[1:end_seqNum]  ###should be 32 bits/4 bytes
+        len = decoded_packet[end_seqNum:end_seqNum + 4]  # len sent_packet = 1400
+        data = decoded_packet[end_seqNum + 4:end_seqNum + 1404]
+        checksum = decoded_packet[end_seqNum + 1404:]
+        checksum = int(checksum)
+    else:
+        end_seqNum = decoded_packet.find('0x')
+        seq_num = decoded_packet[1:end_seqNum]
+        len = decoded_packet[end_seqNum + 2:end_seqNum + 3]  # get rid of '0x'
+        checksum = decoded_packet[end_seqNum + 3:]  # no data in ACK packet
+    global logfile
+    print('Packet sent; type=', str_type, '; seqNum=', seq_num, '; length=', len, '; checksum=', checksum,
+          file=logfile)
+
+
+def check_for_corruption(bytes_arr, checksum_sender):
     checksum = zlib.crc32(bytes_arr)
-    print('checksum: ', checksum)
-    if(checksum==checksum_sender):
+    # print('checksum: ', checksum)
+    if (checksum == checksum_sender):
         return checksum, False
     else:
         return checksum, True
 
 
-#where the receive_thread operates
-#has to acquire_lock, then release_lock when finished - or use with_lock:
-def receive_thread(socket):
-    lowest_unACKed_packet = 0
-    end_window = lowest_unACKed_packet + 5  # 5 = wind_size
-    while(True):
-        recv_lock.acquire()
-        print('receiver thread starting')
-        while(lowest_unACKed_packet<end_window):
-            # receive packet, but using our unreliable channel
-            # packet_from_server, server_addr = unreliable_channel.recv_packet(socket)
-            packet_from_server,server_addr = socket.recvfrom(2048)
-            print('serverAddress: ', server_addr)
-            seqNum,corrupt = extract_packet_info(packet_from_server)
-            # check for corruption, take steps accordingly
-            if(not corrupt):
-                # update window size, timer, triple dup acks
-                #check if a duplicate ack
-                if last_ACK_num != null:
-                    if seqNum == last_ACK_num:
-                       num_duplicates += 1
-                    else:
-                        num_duplicates = 0
-                        last_ACK_num = seqNum
-                    if num_duplicates == 3:
-                        #resend the oldest unacked packet and start the timer
-                        send_pacekt()
-                    else:
-                        if seqNum == lowest_unACKed_packet:
-                            lowest_unACKed_packet +=1
-                else:
-                    last_ACK_num = seqNum
-                    if seqNum == lowest_unACKed_packet:
-                        lowest_unACKed_packet += 1
-        end_window+=5                           #increment end_window
-        recv_lock.release()
-        time.sleep(10)
+def getPacketSeqNum(packet):
+    decoded_packet = packet.decode('utf-8')
+    end_seqNum = decoded_packet.find('1400')
+    seqNum = decoded_packet[1:end_seqNum]  ###should be 32 bits/4 bytes
+    seqNum = int(seqNum)
+    return seqNum
 
-def getSequence(packet):
+
+def getPacketCheckSum(packet):
+    decoded_packet = packet.decode('utf-8')
+    end_seqNum = decoded_packet.find('1400')
+    len = decoded_packet[end_seqNum:end_seqNum + 4]
+    data = decoded_packet[end_seqNum + 4:end_seqNum + 1404]
+    checksum = decoded_packet[end_seqNum + 1404:]
+    return checksum
+
+
+def send_thread(senderSocket, serverAddr, serverPort, packets, seqNum, logfile):
+    while True:
+        global threadLock
+        global packetsSent
+        global packetIdx
+        # send window sized # packets at a time, then give up lock
+        # threadLock.acquire()
+        sendLock.acquire()  # initial value is 1 -> can start before receive_thread
+        while (packetsSent < 5):
+            threadLock.acquire()
+            packet_with_bool = packets[packetIdx]  # idx is the sequence number
+            # print('packet_with_bool: ', packet_with_bool)
+            packet = packet_with_bool[0]
+            senderSocket.sendto(packet, (serverAddr, serverPort))  # trial to ensure sockets can communicate
+            log_packet_info(packet)
+            if packetsSent == 0:  # if seqNum equals oldest unACKed packet
+                resetTimer()
+            print('packet: ', packetIdx, ' sent, ', 'checksum: ', getPacketCheckSum(packet))
+            packetsSent += 1
+            packetIdx += 1
+            threadLock.release()
+        print('packetsSent: ', packetsSent)
+        packetsSent = 0  # reset packetsSent to zero
+        receiveLock.release()  # release receive_thread after 5 packets sent
+
+
+def resetTimer():
+    global curr_time
+    timeLock.acquire()
+    curr_time = time.perf_counter()  # start oldest packet timer
+    print('curr_timeSEND: ', curr_time)
+    timeLock.release()
+
+
+def decrementTimer():
+    global curr_time
+    timeLock.acquire()
+    new_time = time.perf_counter() - curr_time  # this should be <500ms for oldest unACKed packet
+    print('curr_timeRECEIVE: ', new_time)
+    timeLock.release()
+    return new_time
+
+
+# where the receive_thread operates
+# has to acquire_lock, then release_lock when finished - or use with_lock:
+####set the boolean values in packets to True if timeout occurs (otherwise, leave as False)
+####or, can set them to True to indicate that they have been properly received - this is probably better design
+def receive_thread(receiverSocket, senderSocket, serverAddr, serverPort):
+    while True:
+        # channelLock.acquire()       #acquire decrements semaphore value - will block until count > 0 - this ensure that send goes first
+        receiveLock.acquire()  # initial value = 0 -> has to wait until send_thread is finished
+        print('in receive_thread')
+        global threadLock
+        global lowestPacketIdx
+        global packetsReceived
+
+        while (packetsReceived < 5):
+            threadLock.acquire()
+            # print('lowestPacketIdx: ', lowestPacketIdx)        #lowest unACKed packet
+            packet, serverAddress = receiverSocket.recvfrom(2048)
+            seqNum, corrupt, checksum = extract_packet_info(packet)
+            if (not corrupt and seqNum == lowestPacketIdx):  # and expected sequence Number###################
+                packets[seqNum] = True
+                new_time = decrementTimer()  # see whether time has timed out or not
+                if (new_time > 0.5):  # returns value of time in seconds
+                    senderSocket.sendto(packet, (serverAddr, serverPort))  # resend oldest packet
+            if (not corrupt and seqNum != 0):
+                packets[seqNum] = True
+            packetsReceived += 1
+
+            # if (not corrupt):
+            #    # update window size, timer, triple dup acks
+            #    # check if a duplicate ack
+            #    if last_ACK_num != null:
+            #        if seqNum == last_ACK_num:
+            #            num_duplicates += 1
+            #        else:
+            #            num_duplicates = 0
+            #            last_ACK_num = seqNum
+            #        if num_duplicates == 3:
+            #            #resend the oldest unacked packet and start the timer
+            #
+            #        else:
+            #            if seqNum == lowest_unACKed_packet:
+            #                lowest_unACKed_packet += 1
+            #    else:
+            #        last_ACK_num = seqNum
+            #        if seqNum == lowest_unACKed_packet:
+            #            lowest_unACKed_packet += 1
+            print('packet: ', seqNum, ' received, checksum: ', checksum)
+            threadLock.release()
+        packetsReceived = 0  # reset packetsReceived = 0
+        lowestPacketIdx += 5  # increase lowest unACKed packet by window size
+        sendLock.release()  # increments value of send_thread semaphore so send_thread can go now
+
+
+def resendPacket(packet, senderSocket, serverAddr, serverPort):
+    for packet, status in packets:
+        if status == False:
+            senderSocket.sendto(packet, (serverAddr, serverPort))
+            log_packet_info(packet)
+            resetTimer()
+        break
+
+
+def getPacketInfo(packet):
     decoded_packet = packet.decode('utf-8')
     end_seqNum = decoded_packet.find('1400')
     seq_num = decoded_packet[1:end_seqNum]  ###should be 32 bits/4 bytes
     seq_num = int(seq_num)
-    return seq_num
+    checksum = decoded_packet[end_seqNum + 1404:]
+    return seq_num, checksum
+
 
 def MTPSender_main(arg):
-    print('MTPSender starting')
-    lowest_unACKed_seq_num = 0
     # read the command line arguments
-    # recv_ip = sys.argv[1]
-    # recv_port = sys.argv[2]
-    # wind_size = sys.argv[3]       #size of sliding window
-    wind_size = 5
+    recv_ip = sys.argv[1]  # receiverAddr = '192.168.1.15'
+    recv_port = int(sys.argv[2])  # receiverPort = 49153
+    print('recv_port: ', recv_port)
+    wind_size = int(sys.argv[3])  # size of sliding window
+    # wind_size = 5             wind_size = 5
     # filename = sys.argv[4]        #filename = './1MB.txt'
     filename = '/home/laura/Downloads/1MB.txt'
-    #log_filename = sys.argv[5]
-    log_filename = 'sender-log-file'
+    # log_filename = sys.argv[5]     #log_filename = sender_log.log
+    log_filename = 'sender_log.log'
 
     # open log file and start logging
+    global logfile
     logfile = open(log_filename, "w")
+    # logging.basicConfig(filename=log_filename,encoding='utf-8', level=logging.DEBUG)
 
-    # open client socket and bind  - 'client opens up a UDP client socket'
+    # set up sockets
     serverAddr = '192.168.1.14'
-    receiverAddr = '192.168.1.15'
+    # serverAddr = '172.20.10.5'
     serverPort = 49152
-    receiverPort = 49153
-    sendingSocket = socket(AF_INET, SOCK_DGRAM)  # AF_INET indicates that the underlying network is using IPv4
-        # SOCK_DGRAM indicates that socket is a UDP socket
-        # the OS creates the port number of the client socket (per textbook)
-    sendingSocket.settimeout(5)        #500ms timeout
-    receiverSocket = socket(AF_INET, SOCK_DGRAM)
-    receiverSocket.bind((receiverAddr,receiverPort))
+    # receiverPort = 49700
+    sendingSocket = socket(AF_INET, SOCK_DGRAM)
+    sendingSocket.settimeout(0.5)  # 500ms timeout
+    receiverSocket = socket(AF_INET, SOCK_DGRAM)  # desktop IP = 192.168.1.15
+    receiverSocket.bind((recv_ip, recv_port))
 
-    # start receive thread
-    recv_thread = threading.Thread(target=receive_thread,args=(receiverSocket,))
-    recv_lock.acquire()  # sender acquires receiver's lock
-    recv_thread.start()
-
-
-    # take the input file and split it into packets (use create_packet)
-        #packet data size has to be <= 1472bytes (1472 chars) minus size of header
-        #header = 8 bytes unsigned int (type) + 8 bytes unsigned int (seqnum) + 8 bytes unsigned int (length) + checksum (4 bytes)
-        #packet data size <= 1472 bytes - 28 bytes = 1444 bytes
-    input_file = open(filename) #open arg4
-
-        #preprocess entire input file 1st
+    # preprocess input file into packets
+    input_file = open('/home/laura/Downloads/1MB.txt')  # open arg4
     str = ''
     for line in input_file:
         str += line
     bytes_arr = bytes(str, 'utf-8')
-    # print('sys.getsizeof(bytes_arr): ', sys.getsizeof(bytes_arr))
     data_size = 1400
-    packets = []
-    lowest_unACKed_packet = 0
-    highest_unACKed_packet = 4
 
     packet_num = 0
-    while(len(bytes_arr)>0):
+    while (len(bytes_arr) > 0):
         data = bytes_arr[0:data_size]
         bytes_arr = bytes_arr[data_size:]
-        # print('sys.getsizeof(bytes_arr): ', sys.getsizeof(bytes_arr))
-        packet = create_packet(data,packet_num)
-        packets.append(packet)      #buffer
-        packet_num+=1
-        # clientSocket.sendto(packet,serverName)
+        packet = create_packet(data, packet_num)
+        packets.append([packet, False])  # buffer
+        # packets.append(packet)
+        packet_num += 1
 
-    #sender thread will loop here
     seqNum = 0
-    end_window = seqNum + wind_size
-    while(len(packets)>0):
-        print('end_window: ', end_window)
-        while(seqNum<end_window): #send as many packets as equals wind_size
-            # send packets to server using our unreliable_channel.send_packet()
-            packet = packets.pop(0)
-            seqNum = getSequence(packet)
-            # print('len(packets): ', len(packets))
-            sendingSocket.sendto(packet, (serverAddr, serverPort))  # trial to ensure sockets can communicate
-            #print('sent packet: ', seqNum)
-            log_packet_info(packet, logfile)
-            time.sleep(4)
-            seqNum += 1
-            # unreliable_channel.send_packet(clientSocket,packet,recv_port)    #last argument is an open port - 631
-            # update the window size, timer, etc.
-        end_window += wind_size
-        recv_lock.release()
-        time.sleep(10)
-        recv_lock.acquire()
+    # start threads
+    senderThread = threading.Thread(target=send_thread,
+                                    args=(sendingSocket, serverAddr, serverPort, packets, seqNum, logfile))
+    receiverThread = threading.Thread(target=receive_thread,
+                                      args=(receiverSocket, sendingSocket, serverAddr, serverPort))
+    senderThread.start()
+    receiverThread.start()
 
-
-
-MTPSender_main(0)
 
