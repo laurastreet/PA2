@@ -10,8 +10,16 @@ import time
 import zlib
 DATA = 0
 ACK = 1
+# channelLock = threading.Semaphore(0)
+receiveLock = threading.Semaphore(1)	#start with receive_thread
+sendLock = threading.Semaphore(0)
 
-lock=threading.RLock()	#re-entrant lock
+ACKsent = 0
+packetsAvailable = 0
+# sentlock = threading.Lock()
+# receiveLock = threading.Lock()
+threadlock = threading.Lock()
+
 
 #ACK packets have the same fields as the data packets, without any data
 def create_packet(seq_num):
@@ -22,7 +30,7 @@ def create_packet(seq_num):
 	checksum = str(checksum)
 	checksum = bytes(checksum, 'utf-8')
 	packet = bytes_arr + checksum
-	return packet
+	return packet, checksum
 
 
 #should return the sequence number of packet and whether it is corrupt or not
@@ -32,20 +40,19 @@ def extract_packet_info(ModifiedMessage):
 	# print('ModifiedMessage: ', ModifiedMessage)
 	decoded_packet = ModifiedMessage.decode('utf-8')
 	# print('decoded_packet: ', decoded_packet)
-	end_numSeq = decoded_packet.find('1400')
+	end_seqNum = decoded_packet.find('1400')
 
 	packet_type = decoded_packet[0:1]
 	# print('packet_type: ', packet_type)
-	seq_num = decoded_packet[1:end_numSeq]		#this is sandwiched in between packet_type and length (will vary but Receiver will
+	seq_num = decoded_packet[1:end_seqNum]		#this is sandwiched in between packet_type and length (will vary but Receiver will
 		#eventually know what to expect) - keep at length 1 for now
 	# print(f"ModifiedMessage: {ModifiedMessage}")
 	seq_num = int(seq_num)
-	print('seq_num: ', seq_num)
-	length = decoded_packet[end_numSeq:end_numSeq+4]
+	length = decoded_packet[end_seqNum:end_seqNum+4]
 	# print('length: ', length)						#this is fixed
-	data = decoded_packet[end_numSeq+4:end_numSeq+1404]
+	data = decoded_packet[end_seqNum+4:end_seqNum+1404]
 	# print('data: ', data)
-	checksum = decoded_packet[end_numSeq+1404:]
+	checksum = decoded_packet[end_seqNum+1404:]
 	bytes_arr = bytes(str(packet_type) + str(seq_num) + str(length) + str(data), 'utf-8')
 	# checksum = decoded_packet[-10:]
 	# if(checksum[0]=='\''):
@@ -54,8 +61,7 @@ def extract_packet_info(ModifiedMessage):
 	# print('type(checksum_sender): ', type(checksum))
 	# print('checksum_sender: ', checksum)
 	corrupt = check_for_corruption(bytes_arr, checksum)
-	print('corrupt: ', corrupt)
-	return seq_num, corrupt
+	return seq_num, corrupt, checksum
 # extract the packet data after receiving
 
 def check_for_corruption(bytes_arr, checksum_sender):
@@ -67,21 +73,42 @@ def check_for_corruption(bytes_arr, checksum_sender):
 	else:
 		return True
 
+def receiver_thread(receiverSocket):
+	while True:
+		receiveLock.acquire()		#receive lock count starts at 1
+		global packetsAvailable		#this will initially be zero (no packets received)
+		while(packetsAvailable<5):
+			global threadlock
+			threadlock.acquire()
+			packet, serverAddress = receiverSocket.recvfrom(2048)  # modifiedMessage contains packet data - 2048 is the buffer size
+			packetsAvailable+=1
+			seq_num, corrupt, checksum = extract_packet_info(packet)
+			print('packet: ', seq_num, ' received, corrupt ', corrupt, ', checksum: ', checksum)
+			# time.sleep(2)
+			threadlock.release()
+		sendLock.release()		#increment sendLock so it can send ACKs
+			# channelLock.release()			#increments semaphore (sends ACK once it receives packet)
+
+
+
 #sends ACK for last correctly received packet
 def sender_thread(socket,serverAddr,serverPort):
-	seqNum = 0
-	while(True):
-		lock.acquire()
-		print("in Receiver's sender_thread")
-		packets_sent = 0
-		while(packets_sent<5):
-			packet = create_packet(seqNum)
-			print('ACK: ', seqNum)
-			socket.sendto(packet,(serverAddr,serverPort))
-			packets_sent+=1
-			seqNum +=1
-		lock.release()
-		time.sleep(10)
+	while True:
+		sendLock.acquire()			#this will initially be blocked until packets have been received by receive_thread
+		global packetsAvailable
+		while(packetsAvailable>0):
+			global threadlock
+			threadlock.acquire()
+			global ACKsent
+			packet,checksum = create_packet(ACKsent)					#ACKsent = seqNum
+			socket.sendto(packet, (serverAddr, serverPort))
+			# sentlock.release()
+			print('ACK: ', ACKsent, 'sent, checksum ', checksum)
+			# time.sleep(2)
+			ACKsent += 1
+			packetsAvailable-=1
+			threadlock.release()
+		receiveLock.release()		#increment receiveLock so it can receive more packets
 
 def MTPReceiver_main(arg):
 	print('MTPReceiver starting')
@@ -94,11 +121,12 @@ def MTPReceiver_main(arg):
 	# open log file and start logging
 	# logfile = open(log_filename, "a")
 
-	# open server socket and bind
+	#set up sockets
 	receiverAddr = '192.168.1.14'
+	# receiverAddr = '172.20.10.5'
 	serverAddr = '192.168.1.15'
 	receiverPort = 49152
-	serverPort = 49153  # other port can be 631
+	serverPort = 50000  # other port can be 631
 	receiverSocket = socket(AF_INET, SOCK_DGRAM)  # AF_INET indicates that the underlying network is using IPv4
 		# SOCK_DGRAM indicates that socket is a UDP socket
 		# the OS creates the port number of the client socket (per textbook)
@@ -107,37 +135,12 @@ def MTPReceiver_main(arg):
 	# receiverSocket.settimeout(5)  # 5s timeout (change to 500ms later)
 	sendingSocket = socket(AF_INET, SOCK_DGRAM)
 
-	#start sending thread
-	send_thread = threading.Thread(target=sender_thread, args=(sendingSocket,serverAddr,serverPort,))
-	lock.acquire()
-	send_thread.start()
+	#create threads and start
+	senderThread = threading.Thread(target=sender_thread, args=(sendingSocket, serverAddr, serverPort,))
+	receiverThread = threading.Thread(target=receiver_thread, args=(receiverSocket,))
 
-	wind_size = 5
-	while(True):
-		# start = time.perf_counter()
-		# while(time.perf_counter()-start<5000):
-		while(expected_seqNum<wind_size):
-			# receive packet, but using our unreliable channel
-			# received_data, recv_addr = unreliable_channel.recv_packet(clientSocket)  # last argument is an open port
-			modifiedMessage, serverAddress = receiverSocket.recvfrom(2048)  # modifiedMessage contains packet data - 2048 is the buffer size
-			# print('serverAddress: ', serverAddress)
-			# time.sleep(0.5)
-			# call extract_packet_info
-			seq_num, corrupt = extract_packet_info(modifiedMessage)
-			print('seq_num received: ', seq_num, 'expected_seqNum: ', expected_seqNum)
-			if(seq_num==expected_seqNum and not corrupt):		#delay ACK
-				# check for corruption and lost packets, send ack accordingly
-				ACK = create_packet(seq_num)
-				sendingSocket.sendto(ACK, (serverAddr, serverPort))
-				expected_seqNum +=1
-				print('expected_seqNum: ', expected_seqNum)
-			if(seq_num!=expected_seqNum or corrupt):
-				ACK = create_packet(expected_seqNum)
-				sendingSocket.sendto(ACK, (serverAddr,serverPort))
-		wind_size+=5
-		lock.release()
-		time.sleep(10)
-		lock.acquire()
+	receiverThread.start()
+	senderThread.start()
 
 MTPReceiver_main(0)
 
